@@ -1,6 +1,9 @@
 #include "design_io.hpp"
 #include <iostream>
 #include <cstring>
+#include <fstream>
+#include <sstream>
+#include <regex>
 #include "defrReader.hpp"
 #include "defwWriter.hpp"
 
@@ -162,5 +165,107 @@ bool writeDEF(const std::string& out, const Design& d){
     fprintf(fo, "END DESIGN\n");
     fclose(fo);
     std::cout<<"✅ DEF written → "<<out<<"\n";
+    return true;
+}
+
+static const char* orientToStr(Orient o){
+    switch(o){
+        case Orient::N: return "N";
+        case Orient::S: return "S";
+        case Orient::E: return "E";
+        case Orient::W: return "W";
+        case Orient::FN:return "FN";
+        case Orient::FS:return "FS";
+        case Orient::FE:return "FE";
+        case Orient::FW:return "FW";
+    }
+    return "N";
+}
+
+// Preserve entire DEF file from input, only update coordinates/orientation in "+ PLACED" lines inside COMPONENTS
+bool writeDEFPreserve(const std::string& inDefPath, const std::string& outDefPath, const Design& d){
+    std::ifstream fin(inDefPath);
+    if(!fin){ std::cerr<<"❌ Cannot open input DEF for preserve mode: "<<inDefPath<<"\n"; return false; }
+    std::ofstream fout(outDefPath);
+    if(!fout){ std::cerr<<"❌ Cannot open output DEF: "<<outDefPath<<"\n"; return false; }
+
+    // Precompute row-orientation by Y for fast lookup
+    std::unordered_map<int,const char*> rowOrientByY;
+    rowOrientByY.reserve(d.layout.rows.size()*2);
+    for (const auto& r : d.layout.rows) {
+        rowOrientByY[r.originY] = r.flip ? "FS" : "N";
+    }
+
+    std::string line;
+    bool inComponents=false;
+    std::string curInst;
+    while (std::getline(fin, line)){
+        std::string outLine = line;
+        // Detect COMPONENTS block boundaries
+        if (!inComponents){
+            // entering COMPONENTS
+            if (line.find("COMPONENTS ") != std::string::npos) {
+                inComponents = true;
+            }
+        } else {
+            if (line.find("END COMPONENTS") != std::string::npos) {
+                inComponents = false;
+                curInst.clear();
+            } else {
+                // capture current instance name when a new component begins: "- instName <master>"
+                std::string trimmed = line;
+                // ltrim spaces
+                trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+                if (!trimmed.empty() && trimmed[0]=='-'){
+                    std::istringstream iss(trimmed);
+                    std::string dash; std::string instName;
+                    iss >> dash >> instName;
+                    if (!instName.empty()) curInst = instName;
+                }
+
+                // If "+ PLACED" line, replace coordinates and orientation using design data
+                if (!curInst.empty()){
+                    // Only modify "+ PLACED" status, leave FIXED/UNPLACED lines intact
+                    if (line.find("+ PLACED") != std::string::npos) {
+                        auto it = d.instName2Id.find(curInst);
+                        if (it != d.instName2Id.end()){
+                            const Inst& inst = d.insts[it->second];
+                            // Orientation must match the row at this Y
+                            const char* rowOri = "N";
+                            auto ro = rowOrientByY.find(inst.y);
+                            if (ro != rowOrientByY.end()) rowOri = ro->second;
+                            // Build replacement "( x y ) ORIENT"
+                            char buf[128];
+                            std::snprintf(buf, sizeof(buf), "( %d %d ) %s", inst.x, inst.y, rowOri);
+
+                            // Find parentheses region and following orient token, then replace
+                            size_t lpar = line.find('(');
+                            size_t rpar = (lpar!=std::string::npos)? line.find(')', lpar) : std::string::npos;
+                            if (lpar != std::string::npos && rpar != std::string::npos) {
+                                // Find start of orient token after rpar
+                                size_t pos = rpar + 1;
+                                while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+                                // Skip existing orientation token letters
+                                size_t orientStart = pos;
+                                while (pos < line.size() && std::isalpha(static_cast<unsigned char>(line[pos]))) ++pos;
+                                size_t orientEnd = pos;
+
+                                std::string prefix = line.substr(0, lpar);
+                                std::string suffix = (orientEnd <= line.size()) ? line.substr(orientEnd) : std::string();
+                                outLine = prefix + buf + suffix;
+                            } else {
+                                // Fallback: replace entire line's coordinates/orient section naïvely
+                                // Keep leading whitespace and status
+                                std::string leading = line.substr(0, line.find_first_not_of(" \t"));
+                                outLine = leading + "+ PLACED " + buf;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fout << outLine << "\n";
+    }
+    std::cout<<"✅ DEF (preserve mode) written → "<<outDefPath<<" (copied from input, updated COMPONENTS:+ PLACED)\n";
     return true;
 }

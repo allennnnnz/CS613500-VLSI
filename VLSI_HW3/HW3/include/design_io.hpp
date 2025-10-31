@@ -10,3 +10,6 @@ bool loadDEF(const std::string& defPath, Design& d);
 
 // DEF Writer：至少寫出 HEADER + DIEAREA + COMPONENTS（供 detail placement 回寫）
 bool writeDEF(const std::string& defPath, const Design& d);
+
+// DEF Writer（保留原檔除 COMPONENTS:+ PLACED 外皆不變）
+bool writeDEFPreserve(const std::string& inDefPath, const std::string& outDefPath, const Design& d);

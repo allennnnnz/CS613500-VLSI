@@ -1,4 +1,5 @@
 #include "design_io.hpp"
+#include "detailPlacement.hpp"
 #include <iostream>
 
 int main(){
@@ -15,22 +16,10 @@ int main(){
     if(!d.sites.empty())
         std::cout<<"site[0] "<<d.sites[0].name<<" size=("<<d.sites[0].sizeX<<","<<d.sites[0].sizeY<<")\n";
 
-    auto hpwl0 = d.totalHPWL();
-    std::cout<<"HPWL before = "<<hpwl0<<"\n";
+    // 執行詳細擺放（合法化 + 簡易局部優化）
+    detailPlacement(d, /*maxIter*/2);
 
-    // demo：移動第一顆可放置的 cell + 吸附 row grid
-    for (auto& inst : d.insts){
-        if (!inst.fixed) {
-            const int w = (inst.macroId>=0)? d.macros[inst.macroId].width : 0;
-            auto snapped = d.snapToRowGrid(inst.x + 200, inst.y, w);
-            inst.x = snapped.x; inst.y = snapped.y;
-            break;
-        }
-    }
-
-    auto hpwl1 = d.totalHPWL();
-    std::cout<<"HPWL after  = "<<hpwl1<<"\n";
-
-    if(!writeDEF(out, d)) return 1;
+    // 以「保留模式」回寫 DEF：完全複製 input DEF，僅更新 COMPONENTS 的 + PLACED 座標與方向
+    if(!writeDEFPreserve(def, out, d)) return 1;
     return 0;
 }
