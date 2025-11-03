@@ -1,11 +1,15 @@
 #pragma once
-#include "design.hpp"
-#include <cstdint>
+#include "design_io.hpp"
 
-// 簡易詳細擺放主流程（含合法化與局部優化）
-void detailPlacement(Design& d, int maxIter);
+// 詳細列放參數（優化後的最佳設置）
+struct DetailPlaceConfig {
+    int    passes        = 60;     // 60 次迭代達到良好收斂
+    int    windowSites   = 1000;   // 非常大的搜索視窗允許充分探索
+    double lambdaTether  = 0.0;    // 完全移除 tether，純 HPWL 優化
+    double gammaInternal = 0.1;    // 極小的內部寬度懲罰
+    double gammaOneSide  = 0.2;    // 極小的單邊懲罰
+    bool   verbose       = false;  // 關閉 verbose 以加快執行
+};
 
-// 向後相容的封裝（忽略 deltaX）
-inline void simpleDetailPlacement(Design& d, int maxIter, int /*deltaX_micron*/) {
-	detailPlacement(d, maxIter);
-}
+// 執行 order-preserving 的 row-by-row DP 詳細列放
+void detailPlacement(Design& d, const DetailPlaceConfig& cfg = DetailPlaceConfig{});

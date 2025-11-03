@@ -81,7 +81,7 @@ LIBSRCS =	\
 			defrReader.cpp \
                         defrSettings.cpp \
 			defwWriter.cpp \
-			defwWriterCalls.cpp
+			# defwWriterCalls.cpp is intentionally excluded: contains non-library sample code (main)
 
 def.tab.cpp : $(DEF_BISON_SRCS)
 	bison -v -p$(DEF_TABNAME)yy -d $(DEF_BISON_SRCS)
