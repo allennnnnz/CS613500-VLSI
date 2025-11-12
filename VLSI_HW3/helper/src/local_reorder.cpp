@@ -1,11 +1,10 @@
 #include <bits/stdc++.h>
-#include "localReorder.hpp"
+#include "local_reorder.hpp"
 #include "wl.hpp"
 #include "segment_utils.hpp"
 
 using namespace std;
-using fastdp::snapToSite; 
-
+using fastdp::snapToSite;
 namespace {
 
 // =====================

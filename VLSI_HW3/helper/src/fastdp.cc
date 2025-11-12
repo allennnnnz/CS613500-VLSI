@@ -3,12 +3,11 @@
 #include "fastdp.hpp"
 #include "wl.hpp"
 
-// 各模組 header（目前只用 localReorder）
-#include "localReorder.hpp"
-// 預留：#include "global_swap.hpp"
+#include "segment_utils.hpp"
+#include "global_swap.hpp"
+#include "local_reorder.hpp"
 // 預留：#include "vertical_swap.hpp"
 // 預留：#include "single_cluster.hpp"
-#include "segment_utils.hpp"
 
 using namespace std;
 
@@ -18,17 +17,8 @@ namespace fastdp {
 // FastDP::optimize — 主流程控制
 // ===============================================================
 //
-// 結構設計為模組化，可自由插拔：
-//    1. buildAdjacency()
-//    2. init HPWL
-//    3. (之後可插入 SingleSegCluster)
-//    4. main iterative loop:
-//          performGlobalSwap()
-//          performVerticalSwap()
-//          performLocalReorder()
-//    5. (最後 refinement clustering)
-//
-// 目前僅啟用 Local Reorder 模組。
+// 現在已支援 Global Swap + Local Reorder，
+// 並保留 Vertical / SingleSegCluster 擴充點。
 // ===============================================================
 void optimize(db::Database& db, int windowSize, int maxPass)
 {
@@ -48,28 +38,30 @@ void optimize(db::Database& db, int windowSize, int maxPass)
     // =====================
     for (int pass = 0; pass < maxPass; ++pass) {
         bool improved = false;
-
         cerr << "========== DP Iteration " << pass << " ==========\n";
 
         // -----------------------------------------------
-        // (1) Global Swap (預留)
-        // improved |= performGlobalSwap(db);
+        // (1) Global Swap
         // -----------------------------------------------
+        cerr << "[GlobalSwap] Start...\n";
+        bool gs = performGlobalSwap(db);
+        if (gs) improved = true;
 
         // -----------------------------------------------
         // (2) Vertical Swap (預留)
-        // improved |= performVerticalSwap(db);
         // -----------------------------------------------
+        // bool vs = performVerticalSwap(db);
+        // if (vs) improved = true;
 
         // -----------------------------------------------
-        // (3) Local Reordering (目前實際啟用)
+        // (3) Local Reordering
         // -----------------------------------------------
         cerr << "[LocalReorder] Start...\n";
         bool lr = performLocalReorder(db, windowSize);
         if (lr) improved = true;
 
         // -----------------------------------------------
-        // (4) Refinement / Legalization
+        // (4) Recompute HPWL
         // -----------------------------------------------
         wl::initAllNetBBox(db);
         long long nowHPWL = wl::totalHPWL(db);
@@ -92,7 +84,6 @@ void optimize(db::Database& db, int windowSize, int maxPass)
 
     wl::initAllNetBBox(db);
     long long finalHPWL = wl::totalHPWL(db);
-
     cerr << "=============================\n";
     cerr << "[FastDP] Final HPWL = " << finalHPWL
          << "  (" << std::setprecision(2)
