@@ -10,8 +10,8 @@
 CC      := gcc
 CXX     := g++
 
-CXXFLAGS := -std=c++14 -O2 -Wall \
-    -I../include \
+CXXFLAGS := -std=c++14 -O3 -march=native -DNDEBUG -fopenmp -Wall \
+	-I../include \
 
 
 

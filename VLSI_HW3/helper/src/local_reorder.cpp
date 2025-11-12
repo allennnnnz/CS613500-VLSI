@@ -102,7 +102,7 @@ static long long evalAndPlaceIfBetter(db::Database& db, Segment& sg, int start, 
 // Generate permutations (cache up to W=5)
 // =====================
 static const vector<vector<int>>& perms(int W) {
-    static vector<vector<vector<int>>> cache(6);
+    static vector<vector<vector<int>>> cache(8);
     if (!cache[W].empty()) return cache[W];
     vector<int> p(W); iota(p.begin(), p.end(), 0);
     do cache[W].push_back(p); while (next_permutation(p.begin(), p.end()));
@@ -139,7 +139,7 @@ static bool improveSegment(db::Database& db, Segment& sg, int W) {
 namespace fastdp {
 
 bool performLocalReorder(db::Database& db, int windowSize) {
-    windowSize = max(2, min(windowSize, 4));
+    windowSize = max(2, min(windowSize, 6));
     auto segs = buildSegments(db);
 
     bool any = false;

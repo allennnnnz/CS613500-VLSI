@@ -27,23 +27,37 @@ static long long partialHPWL(const db::Database& db, const unordered_set<int>& n
 }
 
 // 快速檢查：cid 在其 row 內是否與其他 cell 重疊（使用目前位置）
-static bool noRowOverlapFor(const db::Database& db, int cid) {
+// 僅以鄰近者檢查重疊，需提供該 row 的已排序 cell 列表
+static bool noOverlapWithNeighbors(const db::Database& db, int cid, const vector<int>& rowVec) {
     const auto &C = db.cells[cid];
     int L = C.x, R = C.x + C.width;
-    for (int j = 0; j < (int)db.cells.size(); ++j) {
-        if (j == cid) continue;
-        const auto &D = db.cells[j];
-        if (D.fixed) continue;
-        if (D.y != C.y) continue;
-        int L2 = D.x, R2 = D.x + D.width;
-        if (max(L, L2) < min(R, R2)) return false; // overlap
+    auto it = lower_bound(rowVec.begin(), rowVec.end(), C.x,
+                          [&](int id, int X){ return db.cells[id].x < X; });
+    int li = (int)(it - rowVec.begin()) - 1;
+    int ri = (int)(it - rowVec.begin());
+    if (li >= 0) {
+        int j = rowVec[li];
+        if (j != cid) {
+            const auto &D = db.cells[j];
+            int L2 = D.x, R2 = D.x + D.width;
+            if (max(L, L2) < min(R, R2)) return false;
+        }
+    }
+    if (ri < (int)rowVec.size()) {
+        int j = rowVec[ri];
+        if (j != cid) {
+            const auto &D = db.cells[j];
+            int L2 = D.x, R2 = D.x + D.width;
+            if (max(L, L2) < min(R, R2)) return false;
+        }
     }
     return true;
 }
 
 // 嘗試將 cell a 與 cell b 交換位置（僅在 HPWL 嚴格改善且不違法才接受）
 // 計算交換的加權增益：raw_gain - lambda * 移動距離
-static long long trySwapGain(db::Database& db, int a, int b, double lambda)
+static long long trySwapGain(db::Database& db, int a, int b, double lambda,
+                             const unordered_map<int, vector<int>>& rowCells)
 {
     if (a == b) return 0;
     auto &A = db.cells[a];
@@ -76,7 +90,16 @@ static long long trySwapGain(db::Database& db, int a, int b, double lambda)
         inBounds &= (A.x >= rowAnew->x && rightA <= rowAend && B.x >= rowBnew->x && rightB <= rowBend);
     }
 
-    bool legal = inBounds && noRowOverlapFor(db, a) && noRowOverlapFor(db, b);
+    bool legal = inBounds;
+    if (legal) {
+        auto itArow = rowCells.find(A.y);
+        auto itBrow = rowCells.find(B.y);
+        const vector<int>* vecA = (itArow == rowCells.end()) ? nullptr : &itArow->second;
+        const vector<int>* vecB = (itBrow == rowCells.end()) ? nullptr : &itBrow->second;
+        // 注意：當 A/B 移動到新 row 時，該 rowVec 尚未包含 A/B，本檢查更安全
+        if (vecA) legal &= noOverlapWithNeighbors(db, a, *vecA);
+        if (vecB) legal &= noOverlapWithNeighbors(db, b, *vecB);
+    }
     long long gain = 0;
     if (legal) {
         // 更新受影響 net 的 bbox 以計算 after
@@ -168,23 +191,31 @@ bool performGlobalSwap(db::Database& db)
     bool improved = false;
     int swapCount = 0;
 
-    const int K = 512;             // 總候選上限(更大)
-    const int maxRounds = 12;      // 內部多輪
-    const int search_window = 160; // 空間限制（以 site 為單位，擴大）
-    double lambda = 0.0;         // 暫停移動距離懲罰以放行有效交換
+    const int K = 128;             // 總候選上限(保守)
+    const int maxRounds = 6;       // 內部多輪(保守)
+    const int search_window = 80;  // 空間限制（以 site 為單位）
+    double lambda = 0.01;          // 輕度移動距離懲罰
 
     // 如果可取得 siteX 用於尺度化（假設所有 row stepX 相同）
     int siteX = 1;
     if (!db.rows.empty()) siteX = db.rows[0].stepX;
     lambda *= siteX; // 將係數轉換成與距離相同的尺度
 
+    // row y -> compact index for rowBusy
+    unordered_map<int,int> rowId2Idx;
+    rowId2Idx.reserve(db.rows.size()*2);
+    for (int i=0;i<(int)db.rows.size();++i) rowId2Idx[db.rows[i].y] = i;
+
     for (int round = 0; round < maxRounds; ++round) {
         bool anyThisRound = false;
         auto rowCells = buildRowCells();
         long long hpwl_before_round = wl::totalHPWL(db);
+        vector<char> rowBusy(db.rows.size(), 0);
+        int swapsThisRound = 0;
+        int maxSwapsThisRound = max(100, (int)movable.size()/60); // 限制每輪交換數，降低擾動
         // 行為：按度數高→低逐一嘗試
-        #pragma omp parallel for schedule(static)
-        for (int idx = 0; idx < (int)movable.size(); ++idx) {
+    // 改為序列化掃描以避免競態造成的大幅退化
+    for (int idx = 0; idx < (int)movable.size(); ++idx) {
             int a = movable[idx];
         const auto &A = db.cells[a];
         auto itRow = rowCells.find(A.y);
@@ -246,14 +277,16 @@ bool performGlobalSwap(db::Database& db)
             int bestB = -1;
             for (int b : cand) {
                 if (b == a) continue;
-                long long g = trySwapGain(db, a, b, lambda);
+                if (a >= b) continue; // 對稱性去重
+                long long g = trySwapGain(db, a, b, lambda, rowCells);
                 if (g > bestGain) { bestGain = g; bestB = b; }
             }
 
             if (bestB >= 0 && bestGain > 0) {
-                // 實際交換並更新受影響 nets 的 bbox（需要序列化保護）
-                #pragma omp critical
-                {
+                int raIdx = rowId2Idx.count(db.cells[a].y) ? rowId2Idx.at(db.cells[a].y) : -1;
+                int rbIdx = rowId2Idx.count(db.cells[bestB].y) ? rowId2Idx.at(db.cells[bestB].y) : -1;
+                if (raIdx >=0 && rbIdx >=0 && !rowBusy[raIdx] && !rowBusy[rbIdx]
+                    && swapsThisRound < maxSwapsThisRound) {
                     unordered_set<int> nets;
                     for (int nid : db.cell2nets[a]) nets.insert(nid);
                     for (int nid : db.cell2nets[bestB]) nets.insert(nid);
@@ -261,7 +294,8 @@ bool performGlobalSwap(db::Database& db)
                     int ax=A2.x, ay=A2.y, bx=B2.x, by=B2.y;
                     A2.x=bx; A2.y=by; B2.x=ax; B2.y=ay;
                     for (int nid : nets) wl::recomputeNetBBox(db, nid, db.netBBox[nid]);
-                    ++swapCount; improved = true; anyThisRound = true;
+                    ++swapCount; ++swapsThisRound; improved = true; anyThisRound = true;
+                    rowBusy[raIdx] = rowBusy[rbIdx] = 1;
                 }
             }
         }

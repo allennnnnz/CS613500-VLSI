@@ -6,6 +6,8 @@
 #include "segment_utils.hpp"
 #include "global_swap.hpp"
 #include "local_reorder.hpp"
+#include "vertical_swap.hpp"
+#include "global_reorder.hpp"
 // 預留：#include "vertical_swap.hpp"
 // 預留：#include "single_cluster.hpp"
 
@@ -25,7 +27,7 @@ void optimize(db::Database& db, int windowSize, int maxPass)
     buildAdjacency(db);
     wl::initAllNetBBox(db);
 
-    windowSize = max(2, min(windowSize, 5));
+    windowSize = max(2, min(windowSize, 6));
 
     long long initHPWL = wl::totalHPWL(db);
     cerr << fixed << setprecision(0);
@@ -36,26 +38,35 @@ void optimize(db::Database& db, int windowSize, int maxPass)
     // =====================
     // Main iterative loop
     // =====================
-    double targetImprove = 2.0; // 目標 >=2%
+    double targetImprove = 3.0; // 目標 >=3%
+    long long lastHPWL = initHPWL;
     for (int pass = 0; pass < maxPass; ++pass) {
         bool improved = false;
         cerr << "========== DP Iteration " << pass << " ==========\n";
 
-        // -----------------------------------------------
-        // (1) Global Swap
-        // -----------------------------------------------
-        cerr << "[GlobalSwap] Start...\n";
-        bool gs = performGlobalSwap(db);
-        if (gs) improved = true;
+    // -----------------------------------------------
+    // (1) Global Reorder by target X (segment-level)
+    // -----------------------------------------------
+    cerr << "[GlobalReorder] Start...\n";
+    bool gr = performGlobalReorder(db);
+    if (gr) improved = true;
+
+    // -----------------------------------------------
+    // (2) Global Swap（保守）
+    // -----------------------------------------------
+    cerr << "[GlobalSwap] Start...\n";
+    bool gs = performGlobalSwap(db);
+    if (gs) improved = true;
 
         // -----------------------------------------------
-        // (2) Vertical Swap (預留)
+    // (3) Vertical Swap + Relocate
         // -----------------------------------------------
-        // bool vs = performVerticalSwap(db);
-        // if (vs) improved = true;
+    bool vs = performVerticalSwap(db);
+    bool vr = performVerticalRelocate(db);
+    if (vs || vr) improved = true;
 
         // -----------------------------------------------
-        // (3) Local Reordering
+    // (4) Local Reordering
         // -----------------------------------------------
         cerr << "[LocalReorder] Start...\n";
         bool lr = performLocalReorder(db, windowSize);
@@ -68,9 +79,12 @@ void optimize(db::Database& db, int windowSize, int maxPass)
         long long nowHPWL = wl::totalHPWL(db);
         double delta = 100.0 * (nowHPWL - initHPWL) / initHPWL;
 
-        cerr << "[FastDP] Pass " << pass
-             << "  HPWL = " << nowHPWL
-             << "  (Δ=" << std::setprecision(2) << delta << "%)\n";
+       double passImprove = 100.0 * (lastHPWL - nowHPWL) / lastHPWL;
+       cerr << "[FastDP] Pass " << pass
+           << "  HPWL = " << nowHPWL
+           << "  (Δ=" << std::setprecision(2) << delta << "% cumulative, "
+           << std::setprecision(2) << passImprove << "% pass)\n";
+       lastHPWL = nowHPWL;
 
         double cumulative = 100.0 * (initHPWL - nowHPWL) / initHPWL;
         if (cumulative >= targetImprove) {
