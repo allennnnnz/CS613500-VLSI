@@ -19,6 +19,17 @@ static void reportHPWL(const Design& d, const char* tag) {
     std::cout << "[HPWL " << tag << "] " << d.totalHPWL() << "\n";
 }
 
+// Snapshot/restore helpers (global scope)
+static inline std::vector<std::pair<int,int>> snapshotXY(const Design& d){
+    std::vector<std::pair<int,int>> xy; xy.reserve(d.insts.size());
+    for (const auto& ins : d.insts) xy.emplace_back(ins.x, ins.y);
+    return xy;
+}
+static inline void restoreXY(Design& d, const std::vector<std::pair<int,int>>& xy){
+    size_t n = std::min(xy.size(), d.insts.size());
+    for (size_t i=0;i<n;++i){ d.insts[i].x = xy[i].first; d.insts[i].y = xy[i].second; }
+}
+
 void runDetailedPlacement(Design& d, const std::string& inDefPath, const std::string& outDefPath, int iters)
 {
     // ========== Initialization ==========
@@ -30,21 +41,29 @@ void runDetailedPlacement(Design& d, const std::string& inDefPath, const std::st
     int64_t lastHPWL = hpwl_before;
 
     // ========== Outer Iteration ==========
-    for (int iter = 0; iter < iters; ++iter) {
+    // Keep iterating until cumulative improvement >= 2% (iters is minimum), with safety cap.
+    const double targetImprovePct = 2.0;
+    const int safetyCap = std::max(iters + 200, 1000);
+    for (int iter = 0; ; ++iter) {
         std::cout << "\n========== DP Iteration " << iter << " ==========\n";
+        const int64_t iterStartHPWL = lastHPWL;
 
         // 1️⃣ Global Swap — 全域最佳化階段
         std::cout << "[GlobalSwap] Start...\n";
+        auto snap_gs = snapshotXY(d);
         performGlobalSwap(d);
         int64_t hpwl_gs = d.totalHPWL();
+        if (hpwl_gs > lastHPWL) { restoreXY(d, snap_gs); hpwl_gs = lastHPWL; std::cout << "[GlobalSwap] Rejected (no improvement)\n"; }
         std::cout << "[GlobalSwap] HPWL = " << hpwl_gs 
                   << " (Δ=" << (lastHPWL - hpwl_gs) << ")\n";
         lastHPWL = hpwl_gs;
 
         // 2️⃣ Vertical Swap — 修正垂直錯位
         std::cout << "[VerticalSwap] Start...\n";
+        auto snap_vs = snapshotXY(d);
         bool vs_improved = performVerticalSwap(d);
         int64_t hpwl_vs = d.totalHPWL();
+        if (hpwl_vs > lastHPWL) { restoreXY(d, snap_vs); hpwl_vs = lastHPWL; vs_improved = false; std::cout << "[VerticalSwap] Rejected (no improvement)\n"; }
         std::cout << "[VerticalSwap] HPWL = " << hpwl_vs 
                   << " (Δ=" << (lastHPWL - hpwl_vs) << ")\n";
         lastHPWL = hpwl_vs;
@@ -55,31 +74,38 @@ void runDetailedPlacement(Design& d, const std::string& inDefPath, const std::st
 
         // 4️⃣ Local Reorder — 橫向局部最佳化 (n=3)
         std::cout << "[LocalReorder] Start (n=3)...\n";
+        auto snap_lr = snapshotXY(d);
         bool lr_improved = performLocalReorder(d, 3);
         int64_t hpwl_lr = d.totalHPWL();
+        if (hpwl_lr > lastHPWL) { restoreXY(d, snap_lr); hpwl_lr = lastHPWL; lr_improved = false; std::cout << "[LocalReorder] Rejected (no improvement)\n"; }
         std::cout << "[LocalReorder] HPWL = " << hpwl_lr 
                   << " (Δ=" << (lastHPWL - hpwl_lr) << ")\n";
         lastHPWL = hpwl_lr;
 
         // 5️⃣ Single-Segment Clustering — 動態群聚合法化
         std::cout << "[SingleSegCluster] Start...\n";
+        auto snap_sc = snapshotXY(d);
         bool sc_improved = performSingleSegmentClustering(d);
         int64_t hpwl_sc = d.totalHPWL();
+        if (hpwl_sc > lastHPWL) { restoreXY(d, snap_sc); hpwl_sc = lastHPWL; sc_improved = false; std::cout << "[SingleSegCluster] Rejected (no improvement)\n"; }
         std::cout << "[SingleSegCluster] HPWL = " << hpwl_sc 
                   << " (Δ=" << (lastHPWL - hpwl_sc) << ")\n";
 
-        // ⛔ 早停條件 — 若幾乎沒改善則結束
-        int64_t improvement = lastHPWL - hpwl_sc;
-        double ratio = (double)improvement / (double)lastHPWL * 100.0;
-        lastHPWL = hpwl_sc;
+        // 早停與目標：每回合與累積改善
+        double iterImprovePct = (double)(iterStartHPWL - lastHPWL) / (double)iterStartHPWL * 100.0;
+        double cumulativePct   = (double)(hpwl_before - lastHPWL) / (double)hpwl_before * 100.0;
+        std::cout << "Iteration " << iter 
+                  << " done. Total improvement this round = " << iterImprovePct << "%\n";
+        std::cout << "[DP] Cumulative improvement so far = " << cumulativePct << " %\n";
 
-        if (!vs_improved && !lr_improved && !sc_improved && improvement <= 0) {
-            std::cout << "[DP] No further improvement, stop at iteration " << iter << ".\n";
+        if (cumulativePct >= targetImprovePct && iter + 1 >= iters) {
+            std::cout << "[DP] Target improvement (" << targetImprovePct << "%) reached. Stop.\n";
             break;
         }
-
-        std::cout << "Iteration " << iter 
-                  << " done. Total improvement this round = " << ratio << "%\n";
+        if (iter + 1 >= safetyCap) {
+            std::cout << "[DP] Safety cap reached. Stop.\n";
+            break;
+        }
     }
 
     // ========== Final Report ==========

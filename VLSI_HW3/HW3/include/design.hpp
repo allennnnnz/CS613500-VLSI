@@ -1,3 +1,4 @@
+// Clean Design data model and utilities
 #pragma once
 #include <string>
 #include <vector>
@@ -66,12 +67,15 @@ struct NetPinRef {
 struct Net {
     std::string name;
     std::vector<NetPinRef> pins;
+    bool isSpecial = false; // SPECIALNETS should be excluded from HPWL
 };
 
 struct Layout { RectI dieArea; std::vector<Row> rows; };
 
 struct Design {
     int dbuPerMicron = 2000;
+    // DEF/Design name captured from input (for consistent output headers)
+    std::string designName;
 
     std::vector<Macro> macros;
     std::unordered_map<std::string,int> macroName2Id;
@@ -84,6 +88,9 @@ struct Design {
 
     std::vector<Net>   nets;
     std::unordered_map<std::string,int> netName2Id;
+
+    // IO pin absolute locations from PINS section (by pin name)
+    std::unordered_map<std::string, PointI> ioPinLoc;
 
     Layout layout;
 
@@ -103,7 +110,7 @@ struct Design {
             case Orient::W:  return PointI{ ry,       w - rx   };
             case Orient::FN: return PointI{ w - rx,   ry       };
             case Orient::FS: return PointI{ rx,       h - ry   };
-            case Orient::FE: return PointI{ h - ry,   h - rx   };
+            case Orient::FE: return PointI{ h - ry,   w - rx   }; // ← 修正：第二個用 w
             case Orient::FW: return PointI{ ry,       rx       };
         }
         return PointI{rx,ry};
@@ -121,11 +128,24 @@ struct Design {
 
     int64_t netHPWL(int netId) const {
         const Net& net = nets[netId];
+        if (net.isSpecial) return 0; // exclude special nets
         if (net.pins.empty()) return 0;
         int xmin= std::numeric_limits<int>::max(), ymin= xmin;
         int xmax=-std::numeric_limits<int>::max(), ymax= xmax;
         for (const auto& p : net.pins) {
-            PointI q = p.isIO ? p.ioLoc : pinAbsXY(p.instId, p.libPinIdx);
+            PointI q;
+            if (p.isIO) {
+                auto it = ioPinLoc.find(p.ioName);
+                if (it != ioPinLoc.end()) q = it->second; else q = p.ioLoc; // fallback
+            } else {
+                // bottom-left corner per spec (not pin geometry)
+                if (p.instId >= 0 && p.instId < (int)insts.size()) {
+                    const Inst& ins = insts[p.instId];
+                    q = PointI{ ins.x, ins.y };
+                } else {
+                    q = PointI{0,0};
+                }
+            }
             xmin = std::min(xmin, q.x); xmax = std::max(xmax, q.x);
             ymin = std::min(ymin, q.y); ymax = std::max(ymax, q.y);
         }
@@ -169,3 +189,4 @@ struct Design {
         return false;
     }
 };
+

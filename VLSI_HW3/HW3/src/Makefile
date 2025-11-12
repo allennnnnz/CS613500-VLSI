@@ -28,12 +28,13 @@ OUTPUT_DIR  := ../output
 # 最終執行檔 (放在 ../bin/hw3)
 TARGET := $(BIN_DIR)/hw3
 
-# 專案的 .cpp 檔（明確列出，排除已停用的 detailPlacement.cpp）
+# 專案的 .cpp 檔（明確列出）
 SRCS := \
 	$(SRC_DIR)/main.cpp \
 	$(SRC_DIR)/io_def.cpp \
 	$(SRC_DIR)/io_lef.cpp \
-	$(SRC_DIR)/detailPlacement.cpp
+	$(SRC_DIR)/detailPlacement.cpp \
+	$(SRC_DIR)/global_reorder.cpp
 
 # 物件檔要在 src 這邊，不要丟到 bin
 OBJS := $(SRCS:%.cpp=%.o)

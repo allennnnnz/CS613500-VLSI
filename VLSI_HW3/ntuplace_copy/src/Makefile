@@ -7,7 +7,8 @@ CXXFLAGS := -std=c++17 -O3 -Wall \
     -I../include \
     -I../lefdef/lef/include \
     -I../lefdef/def/include \
-    -fopenmp
+    -fopenmp \
+    -march=native -mavx2 -mfma
 
 LDFLAGS := \
     ../lefdef/lef/lib/liblef.a \

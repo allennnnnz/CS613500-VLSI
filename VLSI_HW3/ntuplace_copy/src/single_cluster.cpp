@@ -27,7 +27,7 @@ bool performSingleSegmentClusteringWeighted(Design& d)
 
         struct Cluster {
             std::vector<int> cells;
-            double optCenter;  // Optimal Region Center
+            double optCenter;  // Optimal Region Centerㄇㄩ
             int width;
             int leftBound, rightBound;
         };

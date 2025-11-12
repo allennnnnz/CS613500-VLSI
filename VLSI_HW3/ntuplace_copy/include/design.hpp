@@ -186,8 +186,12 @@ struct Design {
     }
 
     int64_t totalHPWL() const {
-        int64_t s=0;
-        for (int i=0;i<(int)nets.size();++i) s+=netHPWL(i);
+        int64_t s = 0;
+        const int N = (int)nets.size();
+        #pragma omp parallel for reduction(+:s) schedule(static)
+        for (int i = 0; i < N; ++i) {
+            s += netHPWL(i);
+        }
         return s;
     }
 
@@ -227,43 +231,49 @@ struct Design {
     // ================================================================
     void buildSegments() {
         segments.clear();
+        const int R = (int)layout.rows.size();
+        if (R == 0) return;
 
-        for (int rid = 0; rid < (int)layout.rows.size(); ++rid) {
+        // Per-row temporary storage to avoid synchronization on push_back
+        std::vector<std::vector<Segment>> rowSegs(R);
+
+        #pragma omp parallel for schedule(static)
+        for (int rid = 0; rid < R; ++rid) {
             const Row& row = layout.rows[rid];
-            int rowY = row.originY;
-            int rowX1 = row.originX;
-            int rowX2 = row.originX + row.xStep * row.numSites;
+            const int rowY = row.originY;
+            const int rowX1 = row.originX;
+            const int rowX2 = row.originX + row.xStep * row.numSites;
 
             struct Block { int x1, x2; };
             std::vector<Block> blocks;
+            blocks.reserve(insts.size());
             for (const auto& inst : insts) {
                 if (!inst.fixed || inst.y != rowY) continue;
                 const Macro& mc = macros[inst.macroId];
                 blocks.push_back({ inst.x, inst.x + mc.width });
             }
-
             std::sort(blocks.begin(), blocks.end(),
-                      [](auto& a, auto& b){ return a.x1 < b.x1; });
+                      [](const Block& a, const Block& b){ return a.x1 < b.x1; });
 
             int curX = rowX1;
-            for (auto& blk : blocks) {
+            auto& localSegs = rowSegs[rid];
+            for (const auto& blk : blocks) {
                 if (blk.x1 > curX) {
-                    segments.push_back({ rid, curX, blk.x1, {} });
+                    localSegs.push_back({ rid, curX, blk.x1, {} });
                 }
                 curX = std::max(curX, blk.x2);
             }
             if (curX < rowX2)
-                segments.push_back({ rid, curX, rowX2, {} });
+                localSegs.push_back({ rid, curX, rowX2, {} });
 
-            for (auto& seg : segments) {
-                if (seg.rowId != rid) continue;
+            // Fill movable cell IDs inside segments of this row
+            for (auto& seg : localSegs) {
                 for (int i = 0; i < (int)insts.size(); ++i) {
                     const auto& c = insts[i];
-                    if (c.fixed) continue;
-                    if (c.y != rowY) continue;
+                    if (c.fixed || c.y != rowY) continue;
                     const Macro& mc = macros[c.macroId];
-                    int cx1 = c.x;
-                    int cx2 = c.x + mc.width;
+                    const int cx1 = c.x;
+                    const int cx2 = c.x + mc.width;
                     if (cx1 >= seg.x1 && cx2 <= seg.x2)
                         seg.cellIds.push_back(i);
                 }
@@ -272,6 +282,11 @@ struct Design {
             }
         }
 
+        // Merge back preserving original row order
+        for (int rid = 0; rid < R; ++rid) {
+            auto& ls = rowSegs[rid];
+            segments.insert(segments.end(), ls.begin(), ls.end());
+        }
         std::cout << "[BuildSegments] Total segments = " << segments.size() << "\n";
     }
 };

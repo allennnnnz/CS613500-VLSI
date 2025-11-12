@@ -61,16 +61,60 @@ static int compCb(defrCallbackType_e, defiComponent* c, defiUserData){
     return 0;
 }
 // 這裡先不綁 IO pin；如需精準 IO 位置，可在 PINS callback 蒐集
-static int pinCb(defrCallbackType_e, defiPin* /*p*/, defiUserData){
+static int pinCb(defrCallbackType_e, defiPin* p, defiUserData){
+    // Capture absolute IO pin locations for HPWL computation
+    if (!p) return 0;
+    const char* name = p->pinName();
+    int x=0, y=0;
+    if (p->hasPlacement()) { x = p->placementX(); y = p->placementY(); }
+    else if (p->hasLayer()) { /* fallback if needed */ }
+    if (name) {
+        D->ioPinLoc[name] = PointI{x,y};
+    }
     return 0;
 }
 static int netCb(defrCallbackType_e, defiNet* n, defiUserData){
     Net N; N.name = n->name();
+    N.isSpecial = false;
     for (int i=0;i<n->numConnections();++i){
         const char* inst = n->instance(i);
         const char* pin  = n->pin(i);
         if (std::strcmp(inst, "PIN")==0){
-            NetPinRef R; R.isIO=true; R.ioName=pin; R.ioLoc=PointI{0,0};
+            // Assign IO pin using absolute location from PINS if available
+            NetPinRef R; R.isIO=true; R.ioName=pin;
+            auto it = D->ioPinLoc.find(pin);
+            R.ioLoc = (it!=D->ioPinLoc.end()) ? it->second : PointI{0,0};
+            N.pins.push_back(R);
+        } else {
+            auto it = D->instName2Id.find(inst);
+            if (it==D->instName2Id.end()) continue;
+            int iid = it->second;
+            int mid = D->insts[iid].macroId;
+            int lidx = -1;
+            if (mid>=0){
+                auto jt = D->macros[mid].pinName2Idx.find(pin);
+                if (jt!=D->macros[mid].pinName2Idx.end()) lidx = jt->second;
+            }
+            NetPinRef R; R.instId=iid; R.libPinIdx=lidx; R.isIO=false;
+            N.pins.push_back(R);
+        }
+    }
+    D->netName2Id[N.name] = (int)D->nets.size();
+    D->nets.push_back(std::move(N));
+    return 0;
+}
+
+// SPECIALNETS callback: mark nets as special and store their pins (excluded in HPWL)
+static int specialNetCb(defrCallbackType_e, defiNet* n, defiUserData){
+    if (!n) return 0;
+    Net N; N.name = n->name(); N.isSpecial = true;
+    for (int i=0;i<n->numConnections();++i){
+        const char* inst = n->instance(i);
+        const char* pin  = n->pin(i);
+        if (std::strcmp(inst, "PIN")==0){
+            NetPinRef R; R.isIO=true; R.ioName=pin;
+            auto it = D->ioPinLoc.find(pin);
+            R.ioLoc = (it!=D->ioPinLoc.end()) ? it->second : PointI{0,0};
             N.pins.push_back(R);
         } else {
             auto it = D->instName2Id.find(inst);
@@ -99,6 +143,7 @@ bool loadDEF(const std::string& path, Design& d){
     d.layout = Layout{};
     d.insts.clear(); d.instName2Id.clear();
     d.nets.clear();  d.netName2Id.clear();
+    d.ioPinLoc.clear();
 
     defrInit();
     defrSetUnitsCbk(unitsCb);      // double callback
@@ -107,6 +152,7 @@ bool loadDEF(const std::string& path, Design& d){
     defrSetComponentCbk(compCb);
     defrSetPinCbk(pinCb);
     defrSetNetCbk(netCb);
+    defrSetSNetCbk(specialNetCb);
 
     defrRead(f, path.c_str(), nullptr, 1);
     fclose(f);

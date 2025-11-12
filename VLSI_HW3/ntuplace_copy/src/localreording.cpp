@@ -1,37 +1,42 @@
 #include "dp_stage.hpp"
-#include "design.hpp"
 #include <algorithm>
 #include <vector>
+#include <unordered_set>
 #include <iostream>
-#include <limits>
+#include <omp.h>
 
-// ================================================================
-// Build Segments (Pan et al., 2005 Section III-A.6)
-// ==============================================================
-// ================================================================
-// Local Reordering (Pan et al., 2005 Section III-A.5)
-// ================================================================
-// For each segment, take n=3 consecutive cells, try all permutations,
-// keep boundaries fixed, evenly distribute cells, pick min HPWL.
-// ================================================================
-bool performLocalReorder(Design& d, int windowSize )
+// 局部 HPWL（只重算 window 內 cell 相關的 nets）
+static inline double localHPWL(const Design& d, const std::vector<int>& cellIds) {
+    std::unordered_set<int> nets;
+    for (int id : cellIds)
+        for (int nid : d.inst2nets[id])
+            nets.insert(nid);
+
+    double hpwl = 0;
+    for (int nid : nets)
+        hpwl += d.netHPWL(nid);
+    return hpwl;
+}
+
+bool performLocalReorder(Design& d, int windowSize)
 {
     if (d.segments.empty())
         buildSegments(d);
 
     bool improved = false;
     int reorderCount = 0;
+    auto t0 = omp_get_wtime();
 
-    // Step 1️⃣: process each segment independently
-    for (auto& seg : d.segments) {
+    // 每個 segment 可獨立 → OpenMP 平行
+    #pragma omp parallel for schedule(dynamic)
+    for (int s = 0; s < (int)d.segments.size(); ++s) {
+        auto& seg = d.segments[s];
         auto& cellIds = seg.cellIds;
         if ((int)cellIds.size() < windowSize) continue;
 
-        // sort cells in this segment by x
         std::sort(cellIds.begin(), cellIds.end(),
                   [&](int a, int b){ return d.insts[a].x < d.insts[b].x; });
 
-        // Step 2️⃣: sliding window of size n=3
         for (int start = 0; start + windowSize <= (int)cellIds.size(); ++start) {
             std::vector<int> window(cellIds.begin() + start,
                                     cellIds.begin() + start + windowSize);
@@ -41,15 +46,10 @@ bool performLocalReorder(Design& d, int windowSize )
                          d.macros[d.insts[window.back()].macroId].width;
             int totalWidth = rightX - leftX;
 
-            // store original coordinates
-            std::vector<int> origX(windowSize);
-            for (int k = 0; k < windowSize; ++k)
-                origX[k] = d.insts[window[k]].x;
-
-            // Step 3️⃣: try all permutations (3! = 6)
+            double bestHPWL = localHPWL(d, window);
             std::vector<int> bestOrder = window;
-            double bestHPWL = d.totalHPWL();
 
+            // 用 index permutation，而不是直接改 inst id
             std::sort(window.begin(), window.end());
             do {
                 int sumW = 0;
@@ -59,13 +59,14 @@ bool performLocalReorder(Design& d, int windowSize )
                               ? (totalWidth - sumW) / (windowSize - 1)
                               : 0;
 
+                // 暫時更新位置
                 int curX = leftX;
                 for (int id : window) {
                     d.insts[id].x = curX;
                     curX += d.macros[d.insts[id].macroId].width + spacing;
                 }
 
-                double hpwl = d.totalHPWL();
+                double hpwl = localHPWL(d, window);
                 if (hpwl < bestHPWL) {
                     bestHPWL = hpwl;
                     bestOrder = window;
@@ -73,7 +74,7 @@ bool performLocalReorder(Design& d, int windowSize )
 
             } while (std::next_permutation(window.begin(), window.end()));
 
-            // Step 4️⃣: apply best ordering if improved
+            // 應用最佳排列
             int curX = leftX;
             int sumW = 0;
             for (int id : bestOrder)
@@ -88,12 +89,15 @@ bool performLocalReorder(Design& d, int windowSize )
             }
 
             if (bestOrder != window) {
+                #pragma omp atomic
                 ++reorderCount;
                 improved = true;
             }
         }
     }
 
-    std::cout << "[LocalReorder] Groups re-ordered: " << reorderCount << std::endl;
+    auto t1 = omp_get_wtime();
+    std::cout << "[LocalReorder-OMP] Groups re-ordered: " << reorderCount
+              << "  Time=" << (t1 - t0) << "s\n";
     return improved;
 }

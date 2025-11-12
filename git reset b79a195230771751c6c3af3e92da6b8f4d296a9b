@@ -1,0 +1,23 @@
+[33mcommit b79a195230771751c6c3af3e92da6b8f4d296a9b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: allennnnnz <allenzhuang0117@gmail.com>
+Date:   Tue Nov 11 19:56:46 2025 +0800
+
+    feat: fastDP
+
+[33mcommit 1583f8d555a87e223d75ac5af0607f37b22ed8c0[m
+Author: allennnnnz <allenzhuang0117@gmail.com>
+Date:   Mon Nov 3 23:18:52 2025 +0800
+
+    0.79%
+
+[33mcommit 9dc5a4df39797e18cf7388707010607b165e2bbb[m
+Author: allennnnnz <allenzhuang0117@gmail.com>
+Date:   Fri Oct 31 23:04:48 2025 +0800
+
+    reduction 0.18
+
+[33mcommit 69908c0e6f346e61594e0d00984491334e18362f[m
+Author: allennnnnz <allenzhuang0117@gmail.com>
+Date:   Fri Oct 31 21:34:36 2025 +0800
+
+    chore: initial commit

@@ -1,7 +1,8 @@
-#include "design.hpp"
+#include "dp_stage.hpp"
 #include <algorithm>
 #include <vector>
 #include <limits>
+#include <unordered_set>
 #include <iostream>
 
 // =============================================================
@@ -61,7 +62,7 @@ RectI computeOptimalRegion(const Design& d, int instId)
 // 2️⃣ Overlap Penalty (Section III-A.2)
 // =============================================================
 double computeOverlapPenalty(const Design& d, int i, int j,
-                             double wt1 = 1.0, double wt2 = 5.0)
+                             double wt1, double wt2)
 {
     const Inst& ci = d.insts[i];
     const Inst& cj = d.insts[j];
@@ -74,13 +75,11 @@ double computeOverlapPenalty(const Design& d, int i, int j,
     int overlapW = std::max(0, wi - wj);
     if (overlapW <= 0) return 0.0;
 
-    // 找 j 所在的 row
     const Row* row = nullptr;
     for (const auto& r : d.layout.rows)
         if (r.originY == cj.y) { row = &r; break; }
     if (!row) return 0.0;
 
-    // 收集該 row 所有 cell 區間
     struct CellSeg { int x1, x2; };
     std::vector<CellSeg> segs;
     for (const auto& ins : d.insts)
@@ -89,7 +88,6 @@ double computeOverlapPenalty(const Design& d, int i, int j,
     std::sort(segs.begin(), segs.end(),
               [](auto& a, auto& b){ return a.x1 < b.x1; });
 
-    // 找 s1~s4
     double s1=0, s2=0, s3=0, s4=0;
     for (int k=0; k<(int)segs.size(); ++k) {
         if (segs[k].x1 == cj.x && segs[k].x2 == cj.x + wj) {
@@ -109,7 +107,20 @@ double computeOverlapPenalty(const Design& d, int i, int j,
 }
 
 // =============================================================
-// 3️⃣ Global Swap Based on Benefit (Section III-A.3)
+// 局部 HPWL（只重算 i,j 相關的 nets）
+// =============================================================
+static inline double localHPWL(const Design& d, int i, int j) {
+    std::unordered_set<int> nets;
+    for (int nid : d.inst2nets[i]) nets.insert(nid);
+    for (int nid : d.inst2nets[j]) nets.insert(nid);
+
+    double hpwl = 0;
+    for (int nid : nets) hpwl += d.netHPWL(nid);
+    return hpwl;
+}
+
+// =============================================================
+// 3️⃣ Global Swap Based on Benefit (OMP Optimized)
 // =============================================================
 void performGlobalSwap(Design& d)
 {
@@ -125,25 +136,26 @@ void performGlobalSwap(Design& d)
 
         for (int j = 0; j < (int)d.insts.size(); ++j) {
             if (i == j || d.insts[j].fixed) continue;
-
             const auto& J = d.insts[j];
             if (J.x < optR.x1 || J.x > optR.x2) continue;
             if (J.y < optR.y1 || J.y > optR.y2) continue;
 
-            double W1 = d.totalHPWL();
+            double W1 = localHPWL(d, i, j);
             std::swap(d.insts[i].x, d.insts[j].x);
             std::swap(d.insts[i].y, d.insts[j].y);
-            double W2 = d.totalHPWL();
+            // Rough legality check after hypothetical swap
+            bool legal = d.isRoughLegal(i) && d.isRoughLegal(j);
+            double W2 = legal ? localHPWL(d, i, j) : W1;
             std::swap(d.insts[i].x, d.insts[j].x);
             std::swap(d.insts[i].y, d.insts[j].y);
 
-            double penalty = computeOverlapPenalty(d, i, j, wt1, wt2);
+            double penalty = legal ? computeOverlapPenalty(d, i, j, wt1, wt2) : 1e12;
             double B = (W1 - W2) - penalty;
 
             if (B > bestB) {
                 bestB = B;
                 bestJ = j;
-                if (B > 0.0) break; // first good
+                if (B > 0.0) break;
             }
         }
 
@@ -154,5 +166,5 @@ void performGlobalSwap(Design& d)
         }
     }
 
-    std::cout << "[GlobalSwap] Swaps performed: " << swapCount << std::endl;
+    std::cout << "[GlobalSwap] Swaps performed: " << swapCount << "\n";
 }
