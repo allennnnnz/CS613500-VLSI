@@ -25,7 +25,7 @@ void optimize(db::Database& db, int windowSize, int maxPass)
     buildAdjacency(db);
     wl::initAllNetBBox(db);
 
-    windowSize = max(2, min(windowSize, 4));
+    windowSize = max(2, min(windowSize, 5));
 
     long long initHPWL = wl::totalHPWL(db);
     cerr << fixed << setprecision(0);
@@ -36,6 +36,7 @@ void optimize(db::Database& db, int windowSize, int maxPass)
     // =====================
     // Main iterative loop
     // =====================
+    double targetImprove = 2.0; // 目標 >=2%
     for (int pass = 0; pass < maxPass; ++pass) {
         bool improved = false;
         cerr << "========== DP Iteration " << pass << " ==========\n";
@@ -71,8 +72,13 @@ void optimize(db::Database& db, int windowSize, int maxPass)
              << "  HPWL = " << nowHPWL
              << "  (Δ=" << std::setprecision(2) << delta << "%)\n";
 
+        double cumulative = 100.0 * (initHPWL - nowHPWL) / initHPWL;
+        if (cumulative >= targetImprove) {
+            cerr << "[FastDP] Reached target improvement >= " << targetImprove << "%. Stopping.\n";
+            break;
+        }
         if (!improved) {
-            cerr << "[FastDP] No further improvement, stopping.\n";
+            cerr << "[FastDP] No further improvement and target not met. Stopping.\n";
             break;
         }
     }
